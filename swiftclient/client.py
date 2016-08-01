@@ -803,7 +803,8 @@ def delete_container(url, token, container, http_conn=None,
 
 def get_object(url, token, container, name, http_conn=None,
                resp_chunk_size=None, query_string=None,
-               response_dict=None, headers=None):
+               response_dict=None, headers=None,
+               progress_cb=None):
     """
     Get an object
 
@@ -856,10 +857,18 @@ def get_object(url, token, container, name, http_conn=None,
     if resp_chunk_size:
 
         def _object_body():
+            total_read = 0
+            response_headers = parsed_response['headers']
+            object_size = int(response_headers.get('content-length', 0))
+
             buf = resp.read(resp_chunk_size)
             while buf:
+                if progress_cb:
+                    total_read += len(buf)
+                    progress_cb( total_read, object_size )
                 yield buf
                 buf = resp.read(resp_chunk_size)
+
         object_body = _object_body()
     else:
         object_body = resp.read()
@@ -909,7 +918,7 @@ def head_object(url, token, container, name, http_conn=None):
 def put_object(url, token=None, container=None, name=None, contents=None,
                content_length=None, etag=None, chunk_size=None,
                content_type=None, headers=None, http_conn=None, proxy=None,
-               query_string=None, response_dict=None):
+               query_string=None, response_dict=None, progress_cb=None):
     """
     Put an object
 
@@ -986,7 +995,8 @@ def put_object(url, token=None, container=None, name=None, contents=None,
             conn.putrequest(path, headers=headers, data=chunk_reader())
         else:
             # Fixes https://github.com/kennethreitz/requests/issues/1648
-            data = LengthWrapper(contents, content_length)
+            data = LengthWrapper(contents, content_length,
+                                 chunk_size=chunk_size, progress_cb=progress_cb)
             conn.putrequest(path, headers=headers, data=data)
     else:
         if chunk_size is not None:
@@ -1326,16 +1336,19 @@ class Connection(object):
         return self._retry(None, head_object, container, obj)
 
     def get_object(self, container, obj, resp_chunk_size=None,
-                   query_string=None, response_dict=None, headers=None):
+                   query_string=None, response_dict=None, headers=None,
+                   progress_cb=None):
         """Wrapper for :func:`get_object`"""
         return self._retry(None, get_object, container, obj,
                            resp_chunk_size=resp_chunk_size,
                            query_string=query_string,
-                           response_dict=response_dict, headers=headers)
+                           response_dict=response_dict, headers=headers,
+                           progress_cb=progress_cb)
 
     def put_object(self, container, obj, contents, content_length=None,
                    etag=None, chunk_size=None, content_type=None,
-                   headers=None, query_string=None, response_dict=None):
+                   headers=None, query_string=None, response_dict=None,
+                   progress_cb=None):
         """Wrapper for :func:`put_object`"""
 
         def _default_reset(*args, **kwargs):
@@ -1359,7 +1372,8 @@ class Connection(object):
                            content_length=content_length, etag=etag,
                            chunk_size=chunk_size, content_type=content_type,
                            headers=headers, query_string=query_string,
-                           response_dict=response_dict)
+                           response_dict=response_dict,
+                           progress_cb=progress_cb)
 
     def post_object(self, container, obj, headers, response_dict=None):
         """Wrapper for :func:`post_object`"""

@@ -307,7 +307,7 @@ class _SwiftReader(object):
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type, exc_val, exc_tb): # @TODO: consider possible exc.
         if self._actual_md5 is not None:
             etag = self._actual_md5.hexdigest()
             if etag != self._expected_etag:
@@ -861,7 +861,7 @@ class SwiftService(object):
 
     # Download related methods
     #
-    def download(self, container=None, objects=None, options=None):
+    def download(self, container=None, objects=None, options=None, chunk_size=None, progress_cb=None):
         """
         Download operations on an account, optional container and optional list
         of objects.
@@ -956,7 +956,8 @@ class SwiftService(object):
 
             o_downs = [
                 self.thread_manager.object_dd_pool.submit(
-                    self._download_object_job, container, obj, options
+                    self._download_object_job, container, obj, options,
+                    chunk_size=chunk_size, progress_cb=progress_cb
                 ) for obj in objects
             ]
 
@@ -964,7 +965,8 @@ class SwiftService(object):
                 yield o_down.result()
 
     @staticmethod
-    def _download_object_job(conn, container, obj, options):
+    def _download_object_job(conn, container, obj, options,
+                             chunk_size=None, progress_cb=None):
         out_file = options['out_file']
         results_dict = {}
 
@@ -992,10 +994,14 @@ class SwiftService(object):
         try:
             start_time = time()
 
+            if chunk_size is None:
+                chunk_size=65536
+
             headers, body = \
-                conn.get_object(container, obj, resp_chunk_size=65536,
+                conn.get_object(container, obj, resp_chunk_size=chunk_size,
                                 headers=req_headers,
-                                response_dict=results_dict)
+                                response_dict=results_dict,
+                                progress_cb=progress_cb)
             headers_receipt = time()
 
             reader = _SwiftReader(path, body, headers)
@@ -1012,10 +1018,6 @@ class SwiftService(object):
                         for _ in obj_body.buffer():
                             continue
                     else:
-                        dirpath = dirname(path)
-                        if make_dir and dirpath and not isdir(dirpath):
-                            mkdirs(dirpath)
-
                         if not no_file:
                             if out_file == "-":
                                 res = {
@@ -1026,6 +1028,9 @@ class SwiftService(object):
                             elif out_file:
                                 fp = open(out_file, 'wb')
                             else:
+                                dirpath = dirname(path)
+                                if make_dir and dirpath and not isdir(dirpath):
+                                    mkdirs(dirpath)
                                 if basename(path):
                                     fp = open(path, 'wb')
                                 else:
@@ -1111,7 +1116,7 @@ class SwiftService(object):
 
     # Upload related methods
     #
-    def upload(self, container, objects, options=None):
+    def upload(self, container, objects, options=None, chunk_size=None, progress_cb=None):
         """
         Upload a list of objects to a given container.
 
@@ -1233,7 +1238,8 @@ class SwiftService(object):
             if hasattr(s, 'read'):
                 # We've got a file like object to upload to o
                 file_future = self.thread_manager.object_uu_pool.submit(
-                    self._upload_object_job, container, s, o, object_options
+                    self._upload_object_job, container, s, o, object_options,
+                    chunk_size=chunk_size, progress_cb=progress_cb
                 )
                 details['file'] = s
                 details['object'] = o
@@ -1254,7 +1260,8 @@ class SwiftService(object):
                         file_future = \
                             self.thread_manager.object_uu_pool.submit(
                                 self._upload_object_job, container, s, o,
-                                object_options, results_queue=rq
+                                object_options, results_queue=rq,
+                                chunk_size=chunk_size, progress_cb=progress_cb
                             )
                         file_jobs[file_future] = details
                     except OSError as err:
@@ -1476,7 +1483,7 @@ class SwiftService(object):
             return res
 
     def _upload_object_job(self, conn, container, source, obj, options,
-                           results_queue=None):
+                           results_queue=None, chunk_size=None, progress_cb=None):
         res = {
             'action': 'upload_object',
             'container': container,
@@ -1655,7 +1662,9 @@ class SwiftService(object):
                         container, obj, manifest_data,
                         headers=put_headers,
                         query_string='multipart-manifest=put',
-                        response_dict=mr
+                        response_dict=mr,
+                        progress_cb=progress_cb,
+                        chunk_size=chunk_size
                     )
                     res['manifest_response_dict'] = mr
                 else:
@@ -1671,7 +1680,9 @@ class SwiftService(object):
                     conn.put_object(
                         container, obj, '', content_length=0,
                         headers=put_headers,
-                        response_dict=mr
+                        response_dict=mr,
+                        progress_cb=progress_cb,
+                        chunk_size=chunk_size
                     )
                     res['manifest_response_dict'] = mr
             else:
@@ -1681,14 +1692,18 @@ class SwiftService(object):
                     conn.put_object(
                         container, obj, open(path, 'rb'),
                         content_length=getsize(path), headers=put_headers,
-                        response_dict=obr
+                        response_dict=obr,
+                        progress_cb=progress_cb,
+                        chunk_size=chunk_size
                     )
                     res['response_dict'] = obr
                 else:
                     obr = {}
                     conn.put_object(
                         container, obj, stream, headers=put_headers,
-                        response_dict=obr
+                        response_dict=obr,
+                        progress_cb=progress_cb,
+                        chunk_size=chunk_size
                     )
                     res['response_dict'] = obr
             if old_manifest or old_slo_manifest_paths:

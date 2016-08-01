@@ -110,9 +110,12 @@ def generate_temp_url(path, seconds, key, method):
 
 class LengthWrapper(object):
 
-    def __init__(self, readable, length):
+    def __init__(self, readable, length, chunk_size, progress_cb=None):
         self._length = self._remaining = length
         self._readable = readable
+        self._readsofar = 0
+        self._chunk_size = chunk_size
+        self._progress_callback = progress_cb
 
     def __len__(self):
         return self._length
@@ -120,7 +123,12 @@ class LengthWrapper(object):
     def read(self, *args, **kwargs):
         if self._remaining <= 0:
             return ''
-        chunk = self._readable.read(
-            *args, **kwargs)[:self._remaining]
+        # chunk = self._readable.read(*args, **kwargs)[:self._remaining]
+        chunk = self._readable.read(self._chunk_size)[:self._remaining]
         self._remaining -= len(chunk)
+
+        self._readsofar += len(chunk)
+        if self._progress_callback:
+            self._progress_callback( self._readsofar, self._length )
+
         return chunk
